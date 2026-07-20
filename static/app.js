@@ -264,9 +264,14 @@ async function openForecast(place) {
   panel.hidden = false;
   document.getElementById("panel-place").textContent = place.name.split(",").slice(0, 2).join(",");
   document.getElementById("hours").innerHTML = "";
+  document.getElementById("days").innerHTML = "";
   document.getElementById("now-desc").textContent = "Loading…";
 
-  const resp = await fetch(`/api/forecast?lat=${place.lat}&lon=${place.lon}`);
+  // The backend groups days in THIS timezone, so "Tuesday's rain" means
+  // Tuesday where the viewer is, not Tuesday in UTC.
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const resp = await fetch(
+    `/api/forecast?lat=${place.lat}&lon=${place.lon}&tz=${encodeURIComponent(tz)}`);
   const data = await resp.json();
   if (!resp.ok) {
     document.getElementById("now-desc").textContent = data.error || "Forecast failed.";
@@ -300,5 +305,30 @@ async function openForecast(place) {
       `<span class="h-temp">${point.temp != null ? Math.round(point.temp) + "°" : "–"}</span>` +
       `<span class="h-precip" title="${point.precip ?? 0} mm/h"><span style="width:${pct}%"></span></span>`;
     hoursEl.appendChild(li);
+  }
+
+  // ---- Coming days ----
+  const daysEl = document.getElementById("days");
+  for (const day of data.days || []) {
+    const [dEmoji, dLabel] = SYMBOLS[day.symbol] || ["", ""];
+    // Noon avoids the date sliding a day when parsed/formatted across zones.
+    const label = new Date(day.date + "T12:00:00")
+      .toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+    // Hour ranges get coarse (3-12 h steps) beyond ~day 2: mark as approximate.
+    const approx = day.resolution_h > 2 ? "≈" : "";
+    const periods = (day.rain_periods || [])
+      .map((p) => `${approx}${String(p.from).padStart(2, "0")}–${String(p.to).padStart(2, "0")}`)
+      .join(", ");
+    const rain = day.precip_mm >= 0.1
+      ? `<span class="d-mm">${day.precip_mm} mm</span><span class="d-when">${periods}</span>`
+      : `<span class="d-when d-dry">dry</span>`;
+    const li = document.createElement("li");
+    li.title = dLabel;
+    li.innerHTML =
+      `<span class="d-name">${label}</span>` +
+      `<span class="d-symbol">${dEmoji}</span>` +
+      `<span class="d-temp">${day.temp_max}° <em>${day.temp_min}°</em></span>` +
+      `<span class="d-rain">${rain}</span>`;
+    daysEl.appendChild(li);
   }
 }

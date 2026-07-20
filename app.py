@@ -16,7 +16,9 @@ User-Agent headers) in one place and avoids browser CORS issues.
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from flask import Flask, jsonify, render_template, request, Response
@@ -25,8 +27,13 @@ import radar
 
 app = Flask(__name__)
 
-FORECAST_URL = ("https://opendata-download-metfcst.smhi.se/api/category/pmp3g/"
-                "version/2/geotype/point/lon/{lon}/lat/{lat}/data.json")
+# SMHI point forecast. NOTE: the older pmp3g v2 API was shut down 2026-03-31
+# (every request returns 404); SNOW1g v1 is its replacement. Differences that
+# matter here: "time" instead of "validTime", a flat `data` object instead of
+# a parameters array, human-readable parameter names, and 9999 as the
+# missing-value sentinel. Weather symbol codes (1-27) are unchanged.
+FORECAST_URL = ("https://opendata-download-metfcst.smhi.se/api/category/snow1g/"
+                "version/1/geotype/point/lon/{lon}/lat/{lat}/data.json")
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
 _session = requests.Session()
@@ -128,8 +135,107 @@ def geocode():
 # Point forecast
 # ---------------------------------------------------------------------------
 
-_PARAMS = {"t": "temp", "ws": "wind", "wd": "windDir",
-           "pmean": "precip", "Wsymb2": "symbol", "r": "humidity"}
+# SNOW1g parameter names -> our internal keys (the rest of the app and the
+# frontend only ever see the internal names, which is why this API change
+# stays contained to this one file).
+_PARAMS = {"air_temperature": "temp", "wind_speed": "wind",
+           "wind_from_direction": "windDir",
+           "precipitation_amount_mean": "precip",
+           "symbol_code": "symbol", "relative_humidity": "humidity"}
+_MISSING = 9999                 # SMHI's sentinel for "no value"
+
+# Wsymb2 codes that mean some form of precipitation (rain/sleet/snow/thunder).
+_PRECIP_SYMBOLS = set(range(8, 28)) - {7}
+_RAIN_INTENSITY_MIN = 0.1        # mm/h below this doesn't count as "raining"
+
+
+def _aggregate_days(series: list[dict], tz_name: str | None, max_days: int = 8) -> list[dict]:
+    """Group the forecast series into LOCAL calendar days.
+
+    Two things make this less trivial than it looks:
+
+    * Day boundaries live in the viewer's timezone, not UTC — rain at 00:30
+      local time must count toward the local date. Hence the tz parameter.
+    * SMHI's `pmean` is an intensity (mm/h) valid for the interval *ending*
+      at each timestamp, and intervals grow from 1 h (first days) to 12 h
+      (day 7+). Millimetres = intensity x interval length, and hour ranges
+      get coarser further out — reported via `resolution_h` so the UI can
+      mark them as approximate.
+    """
+    try:
+        tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
+    except (ZoneInfoNotFoundError, ValueError):
+        tzinfo = timezone.utc
+
+    days: dict = {}
+    prev_time = None
+    for point in series:
+        t = datetime.fromisoformat(point["time"].replace("Z", "+00:00"))
+        interval_h = ((t - prev_time).total_seconds() / 3600.0) if prev_time else 1.0
+        interval_h = min(max(interval_h, 1.0), 12.0)
+        prev_time = t
+        start_local = (t - timedelta(hours=interval_h)).astimezone(tzinfo)
+        end_local = t.astimezone(tzinfo)
+
+        day = days.setdefault(start_local.date(), {
+            "temps": [], "mm": 0.0, "wet": [], "symbols": [], "res": 1.0})
+        day["res"] = max(day["res"], interval_h)
+        if point.get("temp") is not None:
+            day["temps"].append(point["temp"])
+        intensity = point.get("precip") or 0.0
+        if intensity >= _RAIN_INTENSITY_MIN:
+            day["mm"] += intensity * interval_h
+            start_h = start_local.hour + start_local.minute / 60.0
+            end_h = start_h + interval_h          # may pass 24: clamp on output
+            day["wet"].append((start_h, end_h))
+        if point.get("symbol") is not None:
+            day["symbols"].append((start_local.hour, point["symbol"]))
+
+    out = []
+    for date in sorted(days)[:max_days]:
+        d = days[date]
+        if not d["temps"]:
+            continue
+        out.append({
+            "date": date.isoformat(),
+            "temp_min": round(min(d["temps"])),
+            "temp_max": round(max(d["temps"])),
+            "precip_mm": round(d["mm"], 1),
+            "rain_periods": _merge_periods(d["wet"]),
+            "symbol": _pick_symbol(d["symbols"], d["mm"]),
+            "resolution_h": round(d["res"]),
+        })
+    return out
+
+
+def _merge_periods(periods: list[tuple[float, float]]) -> list[dict]:
+    """Merge touching wet intervals into ranges like 14-18 (local hours)."""
+    merged: list[list[float]] = []
+    for start, end in sorted(periods):
+        if merged and start <= merged[-1][1] + 0.51:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [{"from": int(s), "to": min(24, int(-(-e // 1)))} for s, e in merged]
+
+
+def _pick_symbol(symbols: list[tuple[int, int]], total_mm: float) -> int | None:
+    """One representative symbol per day, by an explicit rule: the most
+    frequent daytime (06-21) symbol — but if the day actually has rain,
+    prefer the most frequent *precipitation* symbol so a wet afternoon
+    isn't hidden behind a sunny morning."""
+    if not symbols:
+        return None
+    daytime = [s for hour, s in symbols if 6 <= hour <= 21] or [s for _, s in symbols]
+    counts = Counter(daytime)
+    if total_mm >= 0.2:
+        wet_counts = {s: n for s, n in counts.items() if s in _PRECIP_SYMBOLS}
+        if not wet_counts:                    # rain fell outside daytime hours:
+            all_counts = Counter(s for _, s in symbols)   # still don't show sun
+            wet_counts = {s: n for s, n in all_counts.items() if s in _PRECIP_SYMBOLS}
+        if wet_counts:
+            return max(wet_counts, key=wet_counts.get)
+    return counts.most_common(1)[0][0]
 
 
 @app.get("/api/forecast")
@@ -143,21 +249,28 @@ def forecast():
         resp = _session.get(FORECAST_URL.format(lat=lat, lon=lon), timeout=15)
     except requests.RequestException as exc:
         return jsonify(error=f"Could not reach SMHI forecast API: {exc}"), 502
-    if resp.status_code == 400:
+    if resp.status_code in (400, 404):
         return jsonify(error="This place is outside SMHI's forecast area "
                              "(roughly the Nordics and nearby)."), 404
     if resp.status_code != 200:
         return jsonify(error=f"SMHI forecast API returned {resp.status_code}"), 502
 
     series = []
-    for entry in resp.json().get("timeSeries", [])[:26]:
-        point = {"time": entry["validTime"]}
-        for p in entry.get("parameters", []):
-            name = _PARAMS.get(p.get("name"))
-            if name and p.get("values"):
-                point[name] = p["values"][0]
+    for entry in resp.json().get("timeSeries", []):
+        time = entry.get("time") or entry.get("validTime")
+        if not time:
+            continue
+        point = {"time": time}
+        values = entry.get("data") or {}
+        for src, dst in _PARAMS.items():
+            v = values.get(src)
+            if v is None or v == _MISSING:
+                continue
+            point[dst] = int(v) if dst == "symbol" else v
         series.append(point)
-    return jsonify(series=series)
+
+    days = _aggregate_days(series, request.args.get("tz"))
+    return jsonify(series=series[:26], days=days)
 
 
 if __name__ == "__main__":
