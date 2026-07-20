@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nederbörd — live rain radar</title>
+
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  <div id="map" aria-label="Radar map"></div>
+
+  <!-- Brand + search -->
+  <header class="hud hud-top">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-name">Nederbörd</span>
+    </div>
+    <div class="search" role="search">
+      <input id="search-input" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Search a place…" aria-label="Search a place">
+      <ul id="search-results" class="search-results" hidden></ul>
+    </div>
+  </header>
+
+  <!-- Radar timeline -->
+  <div class="hud hud-timeline" id="timeline" hidden>
+    <button id="play-btn" class="play-btn" aria-label="Play animation">
+      <svg class="icon-play" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+        <path d="M4 2.5v11l9-5.5z" fill="currentColor"/>
+      </svg>
+      <svg class="icon-pause" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+        <path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/>
+      </svg>
+    </button>
+    <div class="timeline-body">
+      <div class="ticks" id="ticks" role="presentation"></div>
+      <input id="scrubber" type="range" min="0" max="0" value="0" step="1"
+             aria-label="Radar frame time">
+    </div>
+    <div class="time-readout">
+      <span id="frame-badge" class="frame-badge" hidden>FORECAST</span>
+      <span id="frame-time">--:--</span>
+      <span id="frame-date" class="frame-date"></span>
+    </div>
+  </div>
+
+  <div class="hud hud-status" id="status">Loading radar…</div>
+
+  <!-- Rain intensity legend -->
+  <div class="hud hud-legend" aria-hidden="true">
+    <span>light</span>
+    <span class="legend-bar"></span>
+    <span>heavy</span>
+  </div>
+
+  <!-- Forecast panel -->
+  <aside class="panel" id="panel" hidden>
+    <button class="panel-close" id="panel-close" aria-label="Close forecast">×</button>
+    <h2 id="panel-place">—</h2>
+    <div class="now">
+      <span class="now-symbol" id="now-symbol"></span>
+      <span class="now-temp" id="now-temp">–°</span>
+      <div class="now-meta">
+        <span id="now-desc"></span>
+        <span id="now-wind"></span>
+      </div>
+    </div>
+    <h3>Next hours</h3>
+    <ol class="hours" id="hours"></ol>
+    <p class="panel-note">Forecast: SMHI point forecast (pmp3g). Precipitation bars show mm/h.</p>
+  </aside>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
