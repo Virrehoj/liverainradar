@@ -158,12 +158,31 @@ async function boot() {
   try {
     await loadFrames();
     setPlaying(true);
+    showMotion();
   } catch (err) {
     setStatus(`Radar unavailable: ${err.message}`, true);
   }
 }
 boot();
-setInterval(() => loadFrames().catch(() => {}), REFRESH_MS);
+setInterval(() => loadFrames().then(showMotion).catch(() => {}), REFRESH_MS);
+
+// How the nowcast thinks the rain is moving — shown so the forecast's
+// assumption can be checked against what the animation actually shows.
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+async function showMotion() {
+  try {
+    const resp = await fetch("/api/radar/motion");
+    if (!resp.ok) return;
+    const m = await resp.json();
+    if (m.method === "none" || m.bearing_deg == null || m.speed_kmh < 2) {
+      setStatus("Nowcast: too little rain to track motion");
+      return;
+    }
+    const dir = COMPASS[Math.round(m.bearing_deg / 45) % 8];
+    setStatus(`Nowcast basis: rain drifting ${dir} at ~${Math.round(m.speed_kmh)} km/h ` +
+              `(${m.valid_windows} tracked windows)`);
+  } catch { /* diagnostics are optional */ }
+}
 
 // ---------------------------------------------------------------- search
 

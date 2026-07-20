@@ -300,6 +300,20 @@ def render_frame(key: str) -> bytes:
     return png
 
 
+_last_motion: dict | None = None
+
+
+def get_motion() -> dict:
+    """Motion diagnostics for the newest frames (computing the forecast if needed)."""
+    with _cache_lock:
+        order = list(_observed_order)
+    if not order:
+        raise KeyError("no frames listed yet")
+    _build_forecast(f"fc_{order[-1]}_1")     # cached: cheap after the first call
+    with _cache_lock:
+        return dict(_last_motion or {})
+
+
 def _build_forecast(fc_key: str) -> None:
     """Compute all forecast steps for the base frame the key refers to.
 
@@ -319,26 +333,40 @@ def _build_forecast(fc_key: str) -> None:
 
     with _cache_lock:
         order = list(_observed_order)
+        already_built = f"fc_{base}_{FORECAST_STEPS}" in _png_cache
+    if already_built:
+        return
     if base not in order:
         raise KeyError("forecast base frame is no longer current; refresh")
     idx = order.index(base)
     history = order[max(0, idx - 2):idx + 1]        # up to 3 newest frames
     sources = [_fetch_source(k) for k in history]
 
+    diag = None
     if len(sources) >= 2:
-        fields = [nowcast.motion_field(a, b) for a, b in zip(sources, sources[1:])]
-        vy = np.mean([f[0] for f in fields], axis=0)
-        vx = np.mean([f[1] for f in fields], axis=0)
-    else:                                           # single frame: persistence
+        results = [nowcast.motion_field(a, b) for a, b in zip(sources, sources[1:])]
+        vy = np.mean([r[0] for r in results], axis=0)
+        vx = np.mean([r[1] for r in results], axis=0)
+        diag = results[-1][2]                        # newest pair's diagnostics
+    else:                                            # single frame: persistence
         vy = np.zeros_like(sources[-1], dtype=np.float32)
         vx = np.zeros_like(sources[-1], dtype=np.float32)
 
     future = nowcast.advect(sources[-1], vy, vx, FORECAST_STEPS)
+    global _last_motion
     with _cache_lock:
         for i, arr in enumerate(future, start=1):
             _png_cache[f"fc_{base}_{i}"] = warp_and_colorize(arr)
         while len(_png_cache) > _CACHE_MAX:
             _png_cache.popitem(last=False)
+        _last_motion = {
+            "base": base,
+            "method": diag.method if diag else "persistence",
+            "speed_kmh": round(diag.speed_kmh, 1) if diag else 0.0,
+            "bearing_deg": round(diag.bearing_deg, 1) if diag else None,
+            "valid_windows": diag.valid_windows if diag else 0,
+            "total_windows": diag.total_windows if diag else 0,
+        }
 
 
 def warp_and_colorize(src: np.ndarray) -> bytes:

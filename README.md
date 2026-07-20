@@ -92,17 +92,29 @@ The timeline extends past "now" with six forecast frames (amber ticks, a
 `FORECAST +N min` badge, slightly lighter overlay). They come from
 `nowcast.py`, an *extrapolation nowcast*:
 
-1. **Motion estimation.** The last three observed frames are split into
-   64-pixel blocks (~128 km). For each block, phase correlation — the inverse
-   FFT of the normalized cross-spectrum of two consecutive blocks — peaks
-   exactly at the block's displacement. Blocks with under 2% rainy pixels
-   can't be correlated and inherit the median motion; the vector grid is
-   smoothed and averaged over two frame pairs so one noisy pair can't fling
-   the rain sideways.
+1. **Dense motion estimation.** The frame is scanned with overlapping
+   32-pixel windows every 16 pixels (~a vector every 32 km), each measured by
+   phase correlation against the previous frame, so nearby showers can move
+   in different directions. Interpolated to full resolution, every rain
+   pixel gets its own vector. A caveat from physics — the *aperture
+   problem* — means a pixel can't be tracked in isolation: the featureless
+   interior of a rain area looks identical from frame to frame and carries
+   no motion information at all. Three gates keep such degenerate cases from
+   polluting the field: windows whose content didn't change are treated as
+   "no information" (not "zero motion"); a correlation peak must stand well
+   above its surface's noise floor to count; and vectors disagreeing with
+   their neighbourhood median are rejected as rogue votes. Untracked areas
+   then inherit motion from their *nearest* trusted vectors by diffusion —
+   never from a global average that could belong to a different weather
+   system. Fields from the last two frame pairs are averaged for stability.
 2. **Advection.** The latest frame is pushed along that field one 5-minute
    step at a time, sampling *backward* (`next(x) = curr(x − v(x))`) so every
    future pixel gets exactly one value — the same hole-free logic as the map
    reprojection.
+
+The estimated overall drift (speed + compass direction) is exposed at
+`/api/radar/motion` and shown in the status corner, so the forecast's
+assumption can always be checked against what the animation shows.
 
 This is called **Lagrangian persistence**: rain keeps moving the way it has
 been moving. Its blind spots follow directly from the construction — nothing

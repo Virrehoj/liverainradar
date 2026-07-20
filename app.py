@@ -71,6 +71,17 @@ def radar_frames():
     )
 
 
+@app.get("/api/radar/motion")
+def radar_motion():
+    """How the nowcast thinks the rain field is moving — for sanity-checking."""
+    try:
+        return jsonify(radar.get_motion())
+    except KeyError as exc:
+        return jsonify(error=str(exc)), 404
+    except requests.RequestException as exc:
+        return jsonify(error=f"Could not download frames from SMHI: {exc}"), 502
+
+
 @app.get("/api/radar/image/<key>")
 def radar_image(key: str):
     if not key.replace("_", "").isalnum():
