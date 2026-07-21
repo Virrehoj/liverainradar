@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
+from astral import Observer
+from astral.sun import elevation as sun_elevation, noon as solar_noon, sun as sun_times
 from flask import Flask, jsonify, render_template, request, Response
 
 import radar
@@ -139,9 +141,13 @@ def geocode():
 # frontend only ever see the internal names, which is why this API change
 # stays contained to this one file).
 _PARAMS = {"air_temperature": "temp", "wind_speed": "wind",
-           "wind_from_direction": "windDir",
+           "wind_from_direction": "windDir", "wind_speed_of_gust": "gust",
            "precipitation_amount_mean": "precip",
-           "symbol_code": "symbol", "relative_humidity": "humidity"}
+           "probability_of_precipitation": "precipProb",
+           "symbol_code": "symbol", "relative_humidity": "humidity",
+           "air_pressure_at_mean_sea_level": "pressure",
+           "visibility_in_air": "visibility",
+           "cloud_area_fraction": "cloudCover"}
 _MISSING = 9999                 # SMHI's sentinel for "no value"
 
 # Wsymb2 codes that mean some form of precipitation (rain/sleet/snow/thunder).
@@ -238,6 +244,41 @@ def _pick_symbol(symbols: list[tuple[int, int]], total_mm: float) -> int | None:
     return counts.most_common(1)[0][0]
 
 
+def _feels_like(temp: float | None, wind_ms: float | None, humidity: float | None) -> float | None:
+    """Apparent temperature: proper wind chill when it's cold enough for wind
+    to matter, a mild humidity adjustment on warm/humid days, otherwise the
+    air temperature unchanged."""
+    if temp is None or wind_ms is None:
+        return None
+    wind_kmh = wind_ms * 3.6
+    if temp <= 10 and wind_kmh > 4.8:
+        # Environment Canada / NWS wind chill formula (metric).
+        return round(13.12 + 0.6215 * temp - 11.37 * wind_kmh ** 0.16
+                     + 0.3965 * temp * wind_kmh ** 0.16, 1)
+    if temp >= 20 and humidity is not None and humidity > 40:
+        return round(temp + (humidity - 40) / 100 * (temp - 20) * 0.15, 1)
+    return round(temp, 1)
+
+
+def _sun_info(lat: float, lon: float, tz_name: str | None) -> dict:
+    """Today's sunrise/sunset in the viewer's local time, or a polar-day/
+    polar-night flag for the far north where the sun doesn't rise or set."""
+    try:
+        tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
+    except (ZoneInfoNotFoundError, ValueError):
+        tzinfo = timezone.utc
+    today = datetime.now(tzinfo).date()
+    observer = Observer(latitude=lat, longitude=lon)
+    try:
+        s = sun_times(observer, date=today, tzinfo=tzinfo)
+        return {"sunrise": s["sunrise"].isoformat(), "sunset": s["sunset"].isoformat(),
+                "polarDay": False, "polarNight": False}
+    except ValueError:
+        above_horizon = sun_elevation(observer, solar_noon(observer, date=today, tzinfo=tzinfo)) > 0
+        return {"sunrise": None, "sunset": None,
+                "polarDay": above_horizon, "polarNight": not above_horizon}
+
+
 @app.get("/api/forecast")
 def forecast():
     try:
@@ -267,10 +308,12 @@ def forecast():
             if v is None or v == _MISSING:
                 continue
             point[dst] = int(v) if dst == "symbol" else v
+        point["feelsLike"] = _feels_like(point.get("temp"), point.get("wind"), point.get("humidity"))
         series.append(point)
 
     days = _aggregate_days(series, request.args.get("tz"))
-    return jsonify(series=series[:26], days=days)
+    sun = _sun_info(lat, lon, request.args.get("tz"))
+    return jsonify(series=series[:26], days=days, sun=sun)
 
 
 if __name__ == "__main__":

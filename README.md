@@ -1,9 +1,12 @@
 # Nederbörd — live rain radar over Sweden
 
-A small web app that animates SMHI's weather radar on a full-screen map, with
-place search and an SMHI point forecast for the searched location.
+A Swedish-language web app that animates SMHI's weather radar on a
+full-screen map, with place search, geolocation, and a full SMHI point
+forecast (temperature, feels-like, wind/gusts, humidity, pressure,
+visibility, cloud cover, sunrise/sunset) for the searched location.
 
-Python (Flask) backend, plain HTML/CSS/JS + Leaflet frontend. No API keys.
+Python (Flask) backend, plain HTML/CSS/JS + Leaflet frontend. No API keys —
+sunrise/sunset is computed locally with `astral`, not fetched.
 
 ## Run it
 
@@ -138,6 +141,6 @@ nowcasts start from this exact scheme and add growth/decay modelling on top.
 | `app.py` | Flask routes: page + 4 JSON/PNG endpoints |
 | `radar.py` | Frame listing, download, warp, colorize, caching |
 | `nowcast.py` | Motion estimation (phase correlation) + advection forecast |
-| `templates/index.html` | Page structure |
-| `static/style.css` | Dark "glass HUD over the map" styling |
-| `static/app.js` | Map, animation loop, search, forecast panel |
+| `templates/index.html` | Page structure (Swedish) |
+| `static/style.css` | Light "glass HUD over the map" styling, with a dark-mode variant |
+| `static/app.js` | Map, animation loop, theme toggle, search, geolocation, forecast panel |
