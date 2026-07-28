@@ -1,0 +1,17 @@
+[Unit]
+Description=Nederbord Flask app (gunicorn)
+After=network.target
+
+[Service]
+User=nederbord
+Group=nederbord
+WorkingDirectory=/opt/nederbord
+Environment="PATH=/opt/nederbord/venv/bin"
+ExecStart=/opt/nederbord/venv/bin/gunicorn -w 3 -b 127.0.0.1:8000 app:app
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
